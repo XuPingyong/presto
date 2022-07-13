@@ -66,6 +66,7 @@ public abstract class TestHiveTpchQueries
     public void testTpchQ1()
             throws Exception
     {
+      //  assertQuery(createSession(Optional.empty(), "tpch"), getTpchQuery(1));
         assertQuery(getTpchQuery(1));
     }
 

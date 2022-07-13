@@ -15,10 +15,13 @@ package com.facebook.presto.hive;
 
 import com.facebook.airlift.log.Logger;
 import com.facebook.airlift.log.Logging;
+import com.facebook.presto.Session;
 import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.DistributedQueryRunner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.teradata.tpcds.Table;
+import com.teradata.tpcds.column.Column;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -28,6 +31,7 @@ import java.nio.file.Paths;
 import java.util.Optional;
 import java.util.UUID;
 
+import static com.facebook.presto.hive.HiveQueryRunner.*;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.String.format;
 
@@ -85,28 +89,70 @@ public class HiveExternalWorkerQueryRunner
                                 "deprecated.legacy-date-timestamp-to-varchar-coercion", "true"),
                         "sql-standard",
                         ImmutableMap.of(
-                                "hive.storage-format", "DWRF",
+                                "hive.storage-format", HIVE_FORMAT,
                                 "hive.pushdown-filter-enabled", "true"),
                         baseDataDir);
 
-        // DWRF doesn't support date type. Convert date columns to varchar for lineitem and orders.
-        createLineitem(queryRunner);
-        createOrders(queryRunner);
-        createOrdersEx(queryRunner);
-        createOrdersHll(queryRunner);
-        createNation(queryRunner);
-        createPartitionedNation(queryRunner);
-        createBucketedCustomer(queryRunner);
-        createCustomer(queryRunner);
-        createPart(queryRunner);
-        createPartSupp(queryRunner);
-        createRegion(queryRunner);
-        createSupplier(queryRunner);
-        createEmptyTable(queryRunner);
-        createPrestoBenchTables(queryRunner);
-        createBucketedLineitemAndOrders(queryRunner);
-
+        // HIVE_FORMAT doesn't support date type. Convert date columns to varchar for lineitem and orders.
+        createTpchTables(queryRunner);
+        createTpcdsTables(queryRunner);
         return queryRunner;
+    }
+
+    public static void createTpcdsTables(DistributedQueryRunner queryRunner)
+    {
+        Session.SessionBuilder sessionBuilder = Session.builder(queryRunner.getDefaultSession());
+        sessionBuilder.setSchema("tpcds");
+        Session session = sessionBuilder.build();
+
+        for (Table tpcdsTable : Table.getBaseTables()) {
+            String tableName = tpcdsTable.getName();
+            if (tableName.equals("dbgen_version")) {
+                continue;
+            }
+            if (!queryRunner.tableExists(session, tableName)) {
+                StringBuilder sb = new StringBuilder("CREATE TABLE ");
+                sb.append(tableName).append(" ").append("AS SELECT ");
+                for (Column column : tpcdsTable.getColumns()) {
+                    switch (column.getType().getBase()) {
+                        case CHAR:
+                        case DATE:
+                            sb.append("cast(").append(column.getName()).append(" as varchar) as ").append(column.getName()).append(", ");
+                            break;
+                        case DECIMAL:
+                            sb.append("cast(").append(column.getName()).append(" as real) as ").append(column.getName()).append(", ");
+                            break;
+                        default:
+                            sb.append(column.getName()).append(", ");
+                    }
+                }
+                sb.replace(sb.lastIndexOf(","), sb.length(), "  ");
+                sb.append(" FROM tpcds.tiny.").append(tableName);
+                System.out.println(sb);
+
+                queryRunner.execute(session, sb.toString());
+            }
+        }
+    }
+
+    public static void createTpchTables(DistributedQueryRunner queryRunner)
+    {
+        // DWRF doesn't support date type. Convert date columns to varchar for lineitem and orders.
+        createLineitem(queryRunner.getDefaultSession(), queryRunner);
+        createOrders(queryRunner.getDefaultSession(), queryRunner);
+        createOrdersEx(queryRunner.getDefaultSession(), queryRunner);
+        createOrdersHll(queryRunner.getDefaultSession(), queryRunner);
+        createNation(queryRunner.getDefaultSession(), queryRunner);
+        createPartitionedNation(queryRunner.getDefaultSession(), queryRunner);
+        createBucketedCustomer(queryRunner.getDefaultSession(), queryRunner);
+        createCustomer(queryRunner.getDefaultSession(), queryRunner);
+        createPart(queryRunner.getDefaultSession(), queryRunner);
+        createPartSupp(queryRunner.getDefaultSession(), queryRunner);
+        createRegion(queryRunner.getDefaultSession(), queryRunner);
+        createSupplier(queryRunner.getDefaultSession(), queryRunner);
+        createEmptyTable(queryRunner.getDefaultSession(), queryRunner);
+        createPrestoBenchTables(queryRunner.getDefaultSession(), queryRunner);
+        createBucketedLineitemAndOrders(queryRunner.getDefaultSession(), queryRunner);
     }
 
     public static QueryRunner createNativeQueryRunner(String baseDataDir, String prestoServerPath, Optional<Integer> workerCount, int cacheMaxSize, boolean useThrift)
@@ -133,7 +179,7 @@ public class HiveExternalWorkerQueryRunner
                 ImmutableMap.of(),
                 "legacy",
                 ImmutableMap.of(
-                        "hive.storage-format", "DWRF",
+                        "hive.storage-format", HIVE_FORMAT,
                         "hive.pushdown-filter-enabled", "true"),
                 workerCount,
                 Optional.of(Paths.get(baseDataDir)),
@@ -183,10 +229,10 @@ public class HiveExternalWorkerQueryRunner
                 }));
     }
 
-    private static void createLineitem(QueryRunner queryRunner)
+    private static void createLineitem(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "lineitem")) {
-            queryRunner.execute("CREATE TABLE lineitem AS " +
+        if (!queryRunner.tableExists(session, "lineitem")) {
+            queryRunner.execute(session,"CREATE TABLE lineitem AS " +
                     "SELECT orderkey, partkey, suppkey, linenumber, quantity, extendedprice, discount, tax, " +
                     "   returnflag, linestatus, cast(shipdate as varchar) as shipdate, cast(commitdate as varchar) as commitdate, " +
                     "   cast(receiptdate as varchar) as receiptdate, shipinstruct, shipmode, comment, " +
@@ -198,64 +244,64 @@ public class HiveExternalWorkerQueryRunner
         }
     }
 
-    private static void createOrders(QueryRunner queryRunner)
+    private static void createOrders(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "orders")) {
-            queryRunner.execute("CREATE TABLE orders AS " +
+        if (!queryRunner.tableExists(session, "orders")) {
+            queryRunner.execute(session, "CREATE TABLE orders AS " +
                     "SELECT orderkey, custkey, orderstatus, totalprice, cast(orderdate as varchar) as orderdate, " +
                     "   orderpriority, clerk, shippriority, comment " +
                     "FROM tpch.tiny.orders");
         }
     }
 
-    private static void createOrdersEx(QueryRunner queryRunner)
+    private static void createOrdersEx(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "orders_ex")) {
-            queryRunner.execute("CREATE TABLE orders_ex AS " +
+        if (!queryRunner.tableExists(session, "orders_ex")) {
+            queryRunner.execute(session, "CREATE TABLE orders_ex AS " +
                     "SELECT orderkey, array_agg(quantity) as quantities, map_agg(linenumber, quantity) as quantity_by_linenumber " +
                     "FROM tpch.tiny.lineitem " +
                     "GROUP BY 1");
         }
     }
 
-    private static void createOrdersHll(QueryRunner queryRunner)
+    private static void createOrdersHll(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "orders_hll")) {
-            queryRunner.execute("CREATE TABLE orders_hll AS " +
+        if (!queryRunner.tableExists(session, "orders_hll")) {
+            queryRunner.execute(session, "CREATE TABLE orders_hll AS " +
                     "SELECT orderkey % 23 as key, cast(approx_set(cast(orderdate as varchar)) as varbinary) as hll " +
                     "FROM tpch.tiny.orders " +
                     "GROUP BY 1");
         }
     }
 
-    private static void createNation(QueryRunner queryRunner)
+    private static void createNation(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "nation")) {
-            queryRunner.execute("CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation");
+        if (!queryRunner.tableExists(session, "nation")) {
+            queryRunner.execute(session, "CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation");
         }
     }
 
-    private static void createPartitionedNation(QueryRunner queryRunner)
+    private static void createPartitionedNation(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "nation_partitioned")) {
-            queryRunner.execute("CREATE TABLE nation_partitioned(nationkey BIGINT, name VARCHAR, comment VARCHAR, regionkey VARCHAR) WITH (partitioned_by = ARRAY['regionkey'])");
-            queryRunner.execute("INSERT INTO nation_partitioned SELECT nationkey, name, comment, cast(regionkey as VARCHAR) FROM tpch.tiny.nation");
+        if (!queryRunner.tableExists(session, "nation_partitioned")) {
+            queryRunner.execute(session, "CREATE TABLE nation_partitioned(nationkey BIGINT, name VARCHAR, comment VARCHAR, regionkey VARCHAR) WITH (partitioned_by = ARRAY['regionkey'])");
+            queryRunner.execute(session, "INSERT INTO nation_partitioned SELECT nationkey, name, comment, cast(regionkey as VARCHAR) FROM tpch.tiny.nation");
         }
 
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "nation_partitioned_ds")) {
-            queryRunner.execute("CREATE TABLE nation_partitioned_ds(nationkey BIGINT, name VARCHAR, comment VARCHAR, regionkey VARCHAR, ds VARCHAR) WITH (partitioned_by = ARRAY['ds'])");
-            queryRunner.execute("INSERT INTO nation_partitioned_ds SELECT nationkey, name, comment, cast(regionkey as VARCHAR), '2022-04-09' FROM tpch.tiny.nation");
-            queryRunner.execute("INSERT INTO nation_partitioned_ds SELECT nationkey, name, comment, cast(regionkey as VARCHAR), '2022-03-18' FROM tpch.tiny.nation");
+        if (!queryRunner.tableExists(session,"nation_partitioned_ds")) {
+            queryRunner.execute(session, "CREATE TABLE nation_partitioned_ds(nationkey BIGINT, name VARCHAR, comment VARCHAR, regionkey VARCHAR, ds VARCHAR) WITH (partitioned_by = ARRAY['ds'])");
+            queryRunner.execute(session, "INSERT INTO nation_partitioned_ds SELECT nationkey, name, comment, cast(regionkey as VARCHAR), '2022-04-09' FROM tpch.tiny.nation");
+            queryRunner.execute(session, "INSERT INTO nation_partitioned_ds SELECT nationkey, name, comment, cast(regionkey as VARCHAR), '2022-03-18' FROM tpch.tiny.nation");
         }
     }
 
-    private static void createBucketedCustomer(QueryRunner queryRunner)
+    private static void createBucketedCustomer(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "customer_bucketed")) {
-            queryRunner.execute("CREATE TABLE customer_bucketed(acctbal DOUBLE, custkey BIGINT, name VARCHAR, ds VARCHAR) WITH (bucket_count = 10, bucketed_by = ARRAY['name'], partitioned_by = ARRAY['ds'])");
-            queryRunner.execute("INSERT INTO customer_bucketed SELECT acctbal, custkey, cast(name as VARCHAR), '2021-01-01' FROM tpch.tiny.customer limit 10");
-            queryRunner.execute("INSERT INTO customer_bucketed SELECT acctbal, custkey, cast(name as VARCHAR), '2021-01-02' FROM tpch.tiny.customer limit 20");
-            queryRunner.execute("INSERT INTO customer_bucketed SELECT acctbal, custkey, cast(name as VARCHAR), '2021-01-03' FROM tpch.tiny.customer limit 30");
+        if (!queryRunner.tableExists(session, "customer_bucketed")) {
+            queryRunner.execute(session, "CREATE TABLE customer_bucketed(acctbal DOUBLE, custkey BIGINT, name VARCHAR, ds VARCHAR) WITH (bucket_count = 10, bucketed_by = ARRAY['name'], partitioned_by = ARRAY['ds'])");
+            queryRunner.execute(session, "INSERT INTO customer_bucketed SELECT acctbal, custkey, cast(name as VARCHAR), '2021-01-01' FROM tpch.tiny.customer limit 10");
+            queryRunner.execute(session, "INSERT INTO customer_bucketed SELECT acctbal, custkey, cast(name as VARCHAR), '2021-01-02' FROM tpch.tiny.customer limit 20");
+            queryRunner.execute(session, "INSERT INTO customer_bucketed SELECT acctbal, custkey, cast(name as VARCHAR), '2021-01-03' FROM tpch.tiny.customer limit 30");
         }
     }
 
@@ -265,19 +311,19 @@ public class HiveExternalWorkerQueryRunner
     // - It supports complex types like arrays and maps which is not covered by TPC-H.
     // - TPC-H data model does not have nulls and this gap is covered by PrestoBench.
     // - Add partitioning and bucketing to some of the tables in PrestoBench.
-    private static void createPrestoBenchTables(QueryRunner queryRunner)
+    private static void createPrestoBenchTables(Session session, QueryRunner queryRunner)
     {
         // Create PrestoBench 4 tables
-        createPrestoBenchNation(queryRunner);
-        createPrestoBenchPart(queryRunner);
-        createPrestoBenchCustomer(queryRunner);
-        createPrestoBenchOrders(queryRunner);
+        createPrestoBenchNation(session, queryRunner);
+        createPrestoBenchPart(session, queryRunner);
+        createPrestoBenchCustomer(session, queryRunner);
+        createPrestoBenchOrders(session, queryRunner);
     }
 
-    private static void createCustomer(QueryRunner queryRunner)
+    private static void createCustomer(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "customer")) {
-            queryRunner.execute("CREATE TABLE customer AS " +
+        if (!queryRunner.tableExists(session, "customer")) {
+            queryRunner.execute(session, "CREATE TABLE customer AS " +
                     "SELECT custkey, name, address, nationkey, phone, acctbal, comment, mktsegment " +
                     "FROM tpch.tiny.customer");
         }
@@ -285,10 +331,10 @@ public class HiveExternalWorkerQueryRunner
 
     // prestobench_nation: TPC-H Nation and region tables are consolidated into the nation table adding the region name as a new field.
     // This table is not bucketed or partitioned.
-    private static void createPrestoBenchNation(QueryRunner queryRunner)
+    private static void createPrestoBenchNation(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "prestobench_nation")) {
-            queryRunner.execute("CREATE TABLE prestobench_nation as SELECT nation.nationkey, nation.name, region.name as regionname,nation.comment " +
+        if (!queryRunner.tableExists(session, "prestobench_nation")) {
+            queryRunner.execute(session, "CREATE TABLE prestobench_nation as SELECT nation.nationkey, nation.name, region.name as regionname,nation.comment " +
                                 "FROM tpch.tiny.nation, tpch.tiny.region  WHERE nation.regionkey = region.regionkey");
         }
     }
@@ -301,10 +347,10 @@ public class HiveExternalWorkerQueryRunner
     //        - The value is simply the original supplier columns in tpc-h which are: suppkey, name, address, nationkey, phone, acctbal, comment
     // - Partitioning: p_size (50 values)
     // - Bucketing:none to exercise non bucketed joins
-    private static void createPrestoBenchPart(QueryRunner queryRunner)
+    private static void createPrestoBenchPart(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "prestobench_part")) {
-            queryRunner.execute("CREATE TABLE prestobench_part " +
+        if (!queryRunner.tableExists(session, "prestobench_part")) {
+            queryRunner.execute(session, "CREATE TABLE prestobench_part " +
                     "with (partitioned_by = array['size']) " +
                     "as WITH part_suppliers as (SELECT part.partkey, supplier.suppkey, " +
                     "                                  array_agg(cast(row(supplier.suppkey, supplier.name, availqty, supplycost, address, nationkey, phone, acctbal) as " +
@@ -332,10 +378,10 @@ public class HiveExternalWorkerQueryRunner
     // Nulls: Make 10% of custkey as nulls. This is useful for join keys with nulls.
     // Skew: There are already columns with few values like order status that can be used for skewed (hot task) aggregations.
     //       There are three values with these distributions:  ‘F’ with 49%, ‘O’ with 49% and ‘P’ with 2%
-    private static void createPrestoBenchOrders(QueryRunner queryRunner)
+    private static void createPrestoBenchOrders(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "prestobench_orders")) {
-            queryRunner.execute("CREATE TABLE prestobench_orders " +
+        if (!queryRunner.tableExists(session, "prestobench_orders")) {
+            queryRunner.execute(session, "CREATE TABLE prestobench_orders " +
                      "with (partitioned_by = array['orderdate_year'], bucketed_by = array['custkey'], bucket_count = 16) " +
                      "as WITH order_lineitems as (SELECT o.orderkey, l.linenumber, " +
                      "                                   array_agg(cast(row(partkey, suppkey, quantity, extendedprice, discount, tax, returnflag, linestatus, " +
@@ -365,10 +411,10 @@ public class HiveExternalWorkerQueryRunner
     //  * key=year of ship date and values is total spending by the customer on orders for the year
     // Bucketing: customer key
     // Partitioning: mktsegment (150 values)
-    private static void createPrestoBenchCustomer(QueryRunner queryRunner)
+    private static void createPrestoBenchCustomer(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "prestobench_customer")) {
-            queryRunner.execute("CREATE TABLE prestobench_customer " +
+        if (!queryRunner.tableExists(session, "prestobench_customer")) {
+            queryRunner.execute(session, "CREATE TABLE prestobench_customer " +
                      "with (partitioned_by = array['mktsegment'], bucketed_by = array['custkey'], bucket_count = 64) " +
                      "as WITH customer_yearly_summary as (SELECT custkey, map_agg(y, parts) AS year_parts, map_agg(y, total_cost) AS year_cost " +
                      "                                    FROM (SELECT c.custkey,  cast(substr(cast(shipdate as varchar),1,4) as integer) y, " +
@@ -391,56 +437,56 @@ public class HiveExternalWorkerQueryRunner
         }
     }
 
-    private static void createPart(QueryRunner queryRunner)
+    private static void createPart(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "part")) {
-            queryRunner.execute("CREATE TABLE part AS SELECT * FROM tpch.tiny.part");
+        if (!queryRunner.tableExists(session, "part")) {
+            queryRunner.execute(session, "CREATE TABLE part AS SELECT * FROM tpch.tiny.part");
         }
     }
 
-    private static void createPartSupp(QueryRunner queryRunner)
+    private static void createPartSupp(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "partsupp")) {
-            queryRunner.execute("CREATE TABLE partsupp AS SELECT * FROM tpch.tiny.partsupp");
+        if (!queryRunner.tableExists(session, "partsupp")) {
+            queryRunner.execute(session, "CREATE TABLE partsupp AS SELECT * FROM tpch.tiny.partsupp");
         }
     }
 
-    private static void createRegion(QueryRunner queryRunner)
+    private static void createRegion(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "region")) {
-            queryRunner.execute("CREATE TABLE region AS SELECT * FROM tpch.tiny.region");
+        if (!queryRunner.tableExists(session, "region")) {
+            queryRunner.execute(session, "CREATE TABLE region AS SELECT * FROM tpch.tiny.region");
         }
     }
 
-    private static void createSupplier(QueryRunner queryRunner)
+    private static void createSupplier(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "supplier")) {
-            queryRunner.execute("CREATE TABLE supplier AS SELECT * FROM tpch.tiny.supplier");
+        if (!queryRunner.tableExists(session, "supplier")) {
+            queryRunner.execute(session, "CREATE TABLE supplier AS SELECT * FROM tpch.tiny.supplier");
         }
     }
 
-    private static void createEmptyTable(QueryRunner queryRunner)
+    private static void createEmptyTable(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "empty_table")) {
-            queryRunner.execute("CREATE TABLE empty_table (orderkey BIGINT, shipmodes array(varchar))");
+        if (!queryRunner.tableExists(session, "empty_table")) {
+            queryRunner.execute(session, "CREATE TABLE empty_table (orderkey BIGINT, shipmodes array(varchar))");
         }
     }
 
     // Create two bucketed by 'orderkey' tables to be able to run bucketed execution join query on them.
-    private static void createBucketedLineitemAndOrders(QueryRunner queryRunner)
+    private static void createBucketedLineitemAndOrders(Session session, QueryRunner queryRunner)
     {
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "lineitem_bucketed")) {
-            queryRunner.execute("CREATE TABLE lineitem_bucketed(orderkey BIGINT, partkey BIGINT, suppkey BIGINT, linenumber INTEGER, quantity DOUBLE, ds VARCHAR) " +
+        if (!queryRunner.tableExists(session, "lineitem_bucketed")) {
+            queryRunner.execute(session, "CREATE TABLE lineitem_bucketed(orderkey BIGINT, partkey BIGINT, suppkey BIGINT, linenumber INTEGER, quantity DOUBLE, ds VARCHAR) " +
                     "WITH (bucket_count = 10, bucketed_by = ARRAY['orderkey'], sorted_by = ARRAY['orderkey'], partitioned_by = ARRAY['ds'])");
-            queryRunner.execute("INSERT INTO lineitem_bucketed SELECT orderkey, partkey, suppkey, linenumber, quantity, '2021-12-20' FROM tpch.tiny.lineitem");
-            queryRunner.execute("INSERT INTO lineitem_bucketed SELECT orderkey, partkey, suppkey, linenumber, quantity+10, '2021-12-21' FROM tpch.tiny.lineitem");
+            queryRunner.execute(session, "INSERT INTO lineitem_bucketed SELECT orderkey, partkey, suppkey, linenumber, quantity, '2021-12-20' FROM tpch.tiny.lineitem");
+            queryRunner.execute(session, "INSERT INTO lineitem_bucketed SELECT orderkey, partkey, suppkey, linenumber, quantity+10, '2021-12-21' FROM tpch.tiny.lineitem");
         }
 
-        if (!queryRunner.tableExists(queryRunner.getDefaultSession(), "orders_bucketed")) {
-            queryRunner.execute("CREATE TABLE orders_bucketed (orderkey BIGINT, custkey BIGINT, orderstatus VARCHAR, ds VARCHAR) " +
+        if (!queryRunner.tableExists(session, "orders_bucketed")) {
+            queryRunner.execute(session, "CREATE TABLE orders_bucketed (orderkey BIGINT, custkey BIGINT, orderstatus VARCHAR, ds VARCHAR) " +
                     "WITH (bucket_count = 10, bucketed_by = ARRAY['orderkey'], sorted_by = ARRAY['orderkey'], partitioned_by = ARRAY['ds'])");
-            queryRunner.execute("INSERT INTO orders_bucketed SELECT orderkey, custkey, orderstatus, '2021-12-20' FROM tpch.tiny.orders");
-            queryRunner.execute("INSERT INTO orders_bucketed SELECT orderkey, custkey, orderstatus, '2021-12-21' FROM tpch.tiny.orders");
+            queryRunner.execute(session, "INSERT INTO orders_bucketed SELECT orderkey, custkey, orderstatus, '2021-12-20' FROM tpch.tiny.orders");
+            queryRunner.execute(session, "INSERT INTO orders_bucketed SELECT orderkey, custkey, orderstatus, '2021-12-21' FROM tpch.tiny.orders");
         }
     }
 

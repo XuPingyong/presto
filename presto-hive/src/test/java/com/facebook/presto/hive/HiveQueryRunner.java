@@ -77,6 +77,8 @@ public final class HiveQueryRunner
     private static final String TEMPORARY_TABLE_SCHEMA = "__temporary_tables__";
     private static final DateTimeZone TIME_ZONE = DateTimeZone.forID("America/Bahia_Banderas");
 
+    public static final String HIVE_FORMAT = "DWRF";
+
     public static DistributedQueryRunner createQueryRunner(TpchTable<?>... tables)
             throws Exception
     {
@@ -162,7 +164,7 @@ public final class HiveQueryRunner
                 .build();
 
         DistributedQueryRunner queryRunner =
-                DistributedQueryRunner.builder(createSession(Optional.of(new SelectedRole(ROLE, Optional.of("admin")))))
+                DistributedQueryRunner.builder(createSession(Optional.of(new SelectedRole(ROLE, Optional.of("admin"))), "tpch"))
                         .setNodeCount(workerCount.orElse(4))
                         .setExtraProperties(systemProperties)
                         .setCoordinatorProperties(extraCoordinatorProperties)
@@ -195,7 +197,7 @@ public final class HiveQueryRunner
                     ImmutableMap.copyOf(hiveProperties) :
                     ImmutableMap.<String, String>builder()
                             .putAll(hiveProperties)
-                            .put("hive.storage-format", "TEXTFILE")
+                            .put("hive.storage-format", HIVE_FORMAT)
                             .put("hive.compression-codec", "NONE")
                             .build();
 
